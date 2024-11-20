@@ -346,7 +346,8 @@ def get_sph_slice(B0, rsun, swap_submap):
     return GridInfo, selected_points
 
 def ai_sph_slice(swap_submap, colormap='bwr',vrange=[-4,4], 
-                 is_norm=False, init_wave=False, init_info=[0,0,0,0]):
+                 is_norm=False, init_wave=False, init_info=[0,0,0,0],
+                 is_preview=True):
 
 
     fig = plt.figure(figsize=(6,6))  # 创建一个单独的子图
@@ -471,6 +472,49 @@ def ai_sph_slice(swap_submap, colormap='bwr',vrange=[-4,4],
         phi_si = np.array([y for x, y in selected_inclined])
         init_info = [theta_si[0], theta_si[1], phi_si[0], phi_si[1]]
   
+    if is_preview:
+        fig = plt.figure(figsize=(6,6))  # 创建一个单独的子图
+        ax = fig.add_subplot(projection=swap_submap)
+        swap_submap.plot(axes=ax, cmap=colormap, origin='lower', vmin=vrange[0], vmax=vrange[1])
+        swap_submap.draw_limb(axes=ax)
+        swap_submap.draw_grid(axes=ax)
+        ax.title.set_visible(False)
+        xlim0 = ax.get_xlim()
+        ylim0 = ax.get_ylim()
+        x_min, x_max = xlim0[0], xlim0[1]
+        y_min, y_max = ylim0[0], ylim0[1]
+        observer = swap_submap.observer_coordinate
+        size = 360
+        lat_sl = np.linspace(np.pi/6, np.pi/2, 3)
+        for iit in range(3):
+            thetas = np.full(size, lat_sl[iit])
+            phis = np.linspace(-np.pi, np.pi, size)
+            lon_rot = np.zeros(size)
+            lat_rot = np.zeros(size)
+            for isz in range(size):
+                theta_rot, phi_rot = inverse_transform(thetas[isz], phis[isz], thcc, phcc)
+                lon_rot[isz] = np.rad2deg(phi_rot)
+                lat_rot[isz] = 90 - np.rad2deg(theta_rot)
+            hg_coords = SkyCoord(lon_rot * u.deg, lat_rot * u.deg, 
+                        frame=frames.HeliographicStonyhurst, 
+                        obstime=swap_submap.date)
+            hp_coords = hg_coords.transform_to(frames.Helioprojective(observer=observer))
+            pixel_f = swap_submap.world_to_pixel(hp_coords)
+            x_pixel = pixel_f.x.value
+            y_pixel = pixel_f.y.value
+            plt.plot(x_pixel, y_pixel, '-',color='green', linewidth=0.5)
+        selected_inclined = []
+        selected_inclined_pixel = []
+        o_pixel = np.array([(x, y) for x, y in selected_center_pixel])
+        f_pixel = np.array([(x, y) for x, y in selected_points_pixel])
+        plt.plot(o_pixel[0][0], o_pixel[0][1], 'bs', markersize=10)
+        plt.plot(np.array(f_pixel[:,0]), np.array(f_pixel[:,1]), 'r+', markersize=10)
+        ax.set_xlim(x_min, x_max)
+        ax.set_ylim(y_min, y_max)
+        plt.show()
+
+  
+
     theta_A = init_info[0]
     theta_B = init_info[1]
     phi_A = init_info[2]
@@ -493,7 +537,7 @@ def ai_sph_slice(swap_submap, colormap='bwr',vrange=[-4,4],
 
     GridInfo = np.zeros(7)
     # 交互式地获取phi_min，phi_max, thi_min和thi_max
-    GridInfo[0] = np.deg2rad(float(input('给出弧面的脊宽度最大值[单位：deg](' + str(thi_deg_min) + '->' + str(thi_deg_max) + '): ')))
+    GridInfo[0] = np.deg2rad(float(input('给出弧面的脊宽度最小值[单位：deg](' + str(thi_deg_min) + '->' + str(thi_deg_max) + '): ')))
     GridInfo[1] = np.deg2rad(float(input('给出弧面的脊宽度最大值[单位：deg](' + str(thi_deg_min) + '->' + str(thi_deg_max) + '): ')))
     GridInfo[2] = np.deg2rad(float(input('给出弧面的角宽度最小值[单位：deg](' + str(phi_deg_min) + '->' + str(phi_deg_max) + '): ')))
     GridInfo[3] = np.deg2rad(float(input('给出弧面的角宽度最大值[单位：deg](' + str(phi_deg_min) + '->' + str(phi_deg_max) + '): ')))
@@ -555,8 +599,8 @@ def get_slice_data(swap_submap,GridInfo,nth,nph,
         fov_range[2] = -np.pi
         fov_range[3] = np.pi
     else:
-        fov_range[0] = 0
-        fov_range[1] = Rsun*(GridInfo[1]-GridInfo[0])
+        fov_range[0] = Rsun*GridInfo[0]
+        fov_range[1] = Rsun*GridInfo[1]
         fov_range[2] = 0
         fov_range[3] = Rsun*np.abs(np.sin((GridInfo[1]+GridInfo[0])/2.))*(GridInfo[3] - GridInfo[2])
     values = get_data(x_pixel, y_pixel, swap_submap)
@@ -590,5 +634,159 @@ def get_slice_data(swap_submap,GridInfo,nth,nph,
         plt.show()
 
     return values, fov_range, yt, zt
+
+def trans_coord(map, x, y, thcc, phcc):
+    hp_coords = map.pixel_to_world(x * u.pix, y * u.pix)
+    hg_coords = hp_coords.transform_to(frames.HeliographicStonyhurst(obstime=map.date))
+    lon0 = hg_coords.lon.to(u.deg).value  # 经度 (度)
+    lat0 = hg_coords.lat.to(u.deg).value  # 纬度 (度)
+    theta = np.deg2rad(90 - lat0)
+    phi = np.deg2rad(lon0)
+    theta_rot, phi_rot = rotate_points_spherical(theta, phi, thcc, phcc)
+    lon = np.rad2deg(phi_rot)
+    lat = 90 - np.rad2deg(theta_rot)
+    return lon, lat
+
+def inverse_coord(map, lon, lat, thcc, phcc):
+    Rsun = map.meta.get('rsun_obs', None)
+    observer = map.observer_coordinate
+    ph0 = np.deg2rad(lon)
+    th0 = np.pi/2 - np.deg2rad(lat)
+    th1, ph1 = inverse_transform(th0, ph0, thcc, phcc)
+    lon1 = np.rad2deg(ph1)
+    lat1 = 90 - np.rad2deg(th1)
+    hg_coords = SkyCoord(lon1 * u.deg, lat1 * u.deg, 
+                     frame=frames.HeliographicStonyhurst, 
+                     obstime=map.date)
+    hp_coords = hg_coords.transform_to(frames.Helioprojective(observer=observer))
+    pixel_f = map.world_to_pixel(hp_coords)
+    x_pixel = pixel_f.x.value
+    y_pixel = pixel_f.y.value
+    return x_pixel, y_pixel
+
+def gen_border(map, GridInfo):
+    thcc = GridInfo[4]
+    phcc = GridInfo[5]
+    pht = np.linspace(GridInfo[2], GridInfo[3], 100)
+    tht = np.zeros(100) + GridInfo[1]
+    phb = np.linspace(GridInfo[3], GridInfo[2], 100)
+    thb = np.zeros(100) + GridInfo[0]
+    phr = np.zeros(100) + GridInfo[2]
+    thr = np.linspace(GridInfo[0], GridInfo[1], 100) 
+    phl = np.zeros(100) + GridInfo[3]
+    thl = np.linspace(GridInfo[1], GridInfo[0], 100)
+
+    #start point 
+    if GridInfo[0]==0:
+        nump = 1 + 100 + 100 + 100 + 1
+        pix_x = np.zeros(nump)
+        pix_y = np.zeros(nump)
+        for i in range(nump):
+            if i==0 or i==301:
+                lon = np.rad2deg(0)
+                lat = 90 - np.rad2deg(0)
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)
+            if i > 0 and i <= 100:
+                lon = np.rad2deg(phr[i-1])
+                lat = 90 - np.rad2deg(thr[i-1])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)
+            if i > 100 and i <= 200:
+                lon = np.rad2deg(pht[i-101])
+                lat = 90 - np.rad2deg(tht[i-101])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)
+            if i > 200 and i <= 300:
+                lon = np.rad2deg(phl[i-201])
+                lat = 90 - np.rad2deg(thl[i-201])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)
+    else:
+        nump = 1 + 100 + 100 + 100 + 100 + 1
+        pix_x = np.zeros(nump)
+        pix_y = np.zeros(nump)
+        for i in range(nump):
+            if i==0 or i==401:
+                lon = np.rad2deg(GridInfo[2])
+                lat = 90 - np.rad2deg(GridInfo[0])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)
+            if i > 0 and i <= 100:
+                lon = np.rad2deg(phr[i-1])
+                lat = 90 - np.rad2deg(thr[i-1])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)    
+            if i > 100 and i <= 200:
+                lon = np.rad2deg(pht[i-101])
+                lat = 90 - np.rad2deg(tht[i-101])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)
+            if i > 200 and i <= 300:
+                lon = np.rad2deg(phl[i-201])
+                lat = 90 - np.rad2deg(thl[i-201])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)    
+            if i > 300 and i <= 400:
+                lon = np.rad2deg(phb[i-301])
+                lat = 90 - np.rad2deg(thb[i-301])
+                pix_x[i], pix_y[i] = inverse_coord(map, lon, lat, thcc, phcc)
+    
+    return pix_x, pix_y
+    
+def from_pixel_to_Grid(map, points):
+    selected_points_pixel = points
+    f_pixel = np.array([(x, y) for x, y in selected_points_pixel])
+    x_c = np.mean(f_pixel[:, 0])  # 计算x坐标的平均值
+    y_c = np.mean(f_pixel[:, 1])  # 计算y坐标的平均值
+    selected_center_pixel = []
+    selected_center_pixel.append((x_c, y_c))
+
+    selected_center = []
+    hp_coords = map.pixel_to_world(x_c * u.pix, y_c * u.pix)
+    hg_coords = hp_coords.transform_to(frames.HeliographicStonyhurst(obstime=map.date))
+    world_coords_lon = hg_coords.lon.to(u.deg).value
+    world_coords_lat = hg_coords.lat.to(u.deg).value
+    selected_center.append((world_coords_lon, world_coords_lat))
+
+    selected_points = []
+    for x, y in selected_points_pixel:
+        hp_coords = map.pixel_to_world(x * u.pix, y * u.pix)
+        hg_coords = hp_coords.transform_to(frames.HeliographicStonyhurst(obstime=map.date))
+        world_coords_lon = hg_coords.lon.to(u.deg).value  # 经度 (度)
+        world_coords_lat = hg_coords.lat.to(u.deg).value  # 纬度 (度)
+        selected_points.append((world_coords_lon, world_coords_lat))
+
+    init_center = np.array([(x, y) for x, y in selected_center])
+    given_point = np.array([(x, y) for x, y in selected_points])
+    new_pole = fit_sphere_polar(given_point,init_center)
+
+    thcc = new_pole[0]
+    phcc = new_pole[1]
+    point_map = []
+    for lon, lat in given_point:
+            theta = np.deg2rad(90 - lat)
+            phi = np.deg2rad(lon)
+            theta_rot, phi_rot = rotate_points_spherical(theta, phi, thcc, phcc)
+            point_map.append([theta_rot, phi_rot])
+    theta_rot_vals = np.array([theta_rot for theta_rot, phi_rot in point_map])
+    phi_rot_vals = np.array([phi_rot for theta_rot, phi_rot in point_map])
+
+    phi_rot_vals[phi_rot_vals < 0] += 2 * np.pi
+
+    thi_min = np.min(theta_rot_vals)
+    thi_max = np.max(theta_rot_vals)
+    phi_min = np.min(phi_rot_vals)
+    phi_max = np.max(phi_rot_vals)
+
+    thi_deg_min = np.rad2deg(thi_min)
+    thi_deg_max = np.rad2deg(thi_max)
+    phi_deg_min = np.rad2deg(phi_min)
+    phi_deg_max = np.rad2deg(phi_max)
+
+
+    GridInfo = np.zeros(7)
+    # 交互式地获取phi_min，phi_max, thi_min和thi_max
+    GridInfo[0] = np.deg2rad(float(input('给出弧面的脊宽度最小值[单位：deg](' + str(thi_deg_min) + '->' + str(thi_deg_max) + '): ')))
+    GridInfo[1] = np.deg2rad(float(input('给出弧面的脊宽度最大值[单位：deg](' + str(thi_deg_min) + '->' + str(thi_deg_max) + '): ')))
+    GridInfo[2] = np.deg2rad(float(input('给出弧面的角宽度最小值[单位：deg](' + str(phi_deg_min) + '->' + str(phi_deg_max) + '): ')))
+    GridInfo[3] = np.deg2rad(float(input('给出弧面的角宽度最大值[单位：deg](' + str(phi_deg_min) + '->' + str(phi_deg_max) + '): ')))
+    GridInfo[4] = thcc
+    GridInfo[5] = phcc
+
+    return GridInfo
+
 
 
